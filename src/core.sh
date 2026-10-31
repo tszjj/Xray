@@ -88,6 +88,7 @@ info_list=(
     "公钥 (Public key)"
     "用户名 (Username)"
     "跳过证书验证 (allowlnsecure)"
+    "后量子 (Post-Quantum)"
 )
 change_list=(
     "更改协议"
@@ -108,16 +109,18 @@ change_list=(
     "更改用户名 (Username)"
 )
 servername_list=(
+    aws.amazon.com
     www.amazon.com
     www.ebay.com
     www.paypal.com
-    aws.amazon.com
 )
+# 默认 SNI (REALITY 伪装目标), 置空则从 servername_list 随机
+is_default_servername=aws.amazon.com
 
 is_random_ss_method=${ss_method_list[$(shuf -i 4-6 -n1)]}     # random only use ss2022
 # is_random_header_type=${header_type_list[$(shuf -i 1-5 -n1)]} # random dont use none
 is_random_header_type=none
-is_random_servername=${servername_list[$(shuf -i 0-${#servername_list[@]} -n1) - 1]}
+is_random_servername=${is_default_servername:-${servername_list[$(shuf -i 0-${#servername_list[@]} -n1) - 1]}}
 
 msg() {
     echo -e "$@"
@@ -164,6 +167,29 @@ get_pbk() {
     is_tmp_pbk=($($is_core_bin x25519 | sed 's/.*://'))
     is_private_key=${is_tmp_pbk[0]}
     is_public_key=${is_tmp_pbk[1]}
+}
+
+# REALITY 后量子签名 (ML-DSA-65): 服务端用 seed, 客户端用 verify
+get_mldsa65() {
+    is_tmp_mldsa=($($is_core_bin mldsa65 | sed 's/^[^:]*: *//'))
+    is_mldsa65_seed=${is_tmp_mldsa[0]}
+    is_mldsa65_verify=${is_tmp_mldsa[1]}
+}
+
+# 由已有的 seed 推导 verify (不改动密钥)
+get_mldsa65_verify() {
+    [[ ! $1 ]] && return
+    is_mldsa65_verify=$($is_core_bin mldsa65 -i "$1" 2>/dev/null | grep -i '^Verify' | sed 's/^[^:]*: *//')
+}
+
+# target 证书长度需 > 3500 字节, 否则开启 mldsa65 会形成指纹 (仅提示, 不阻断)
+check_mldsa65_target() {
+    [[ $1 ]] || return
+    is_tmp_cert_len=$($is_core_bin tls ping "$1" 2>/dev/null | grep -i 'total length' | sed 's/[^0-9]//g')
+    [[ $is_tmp_cert_len && $is_tmp_cert_len -lt 3500 ]] && {
+        warn "target ($1) 证书链仅 ${is_tmp_cert_len} 字节 (< 3500), 开启后量子签名后可能形成指纹."
+        warn "建议换一个证书链更大的 target, 可用: $is_core_bin tls ping <domain> 查看."
+    }
 }
 
 show_list() {
@@ -652,6 +678,7 @@ change() {
         is_new_public_key=$4
         [[ ! $is_reality ]] && err "($is_config_file) 不支持更改密钥."
         if [[ $is_auto ]]; then
+            unset is_mldsa65_seed is_mldsa65_verify # 一并更换后量子签名密钥
             get_pbk
             add $net
         else
@@ -1264,8 +1291,8 @@ get() {
             [[ $? != 0 ]] && err "无法读取此文件: $is_config_file"
             is_json_data_more=$(jq '.inbounds[0]|.streamSettings|.network,.tcpSettings.header.type,((.finalmask.udp[0].settings|.value,.header)//(.kcpSettings|.seed,.header.type)),.quicSettings.header.type,.wsSettings.path,.httpSettings.path,.grpcSettings.serviceName,(.xhttpSettings.path//.splithttpSettings.path)' <<<$is_json_str)
             is_json_data_host=$(jq '.inbounds[0]|.streamSettings|.grpc_host,.wsSettings.headers.Host,.httpSettings.host[0],(.xhttpSettings.host//.splithttpSettings.host)' <<<$is_json_str)
-            is_json_data_reality=$(jq '.inbounds[0]|.streamSettings|.security,(.realitySettings|.serverNames[0],.publicKey,.privateKey)' <<<$is_json_str)
-            is_up_var_set=(null is_protocol port uuid trojan_password ss_method ss_password door_addr door_port is_dynamic_port is_socks_user is_socks_pass hysteria_password net tcp_type kcp_seed kcp_type quic_type ws_path h2_path grpc_path xhttp_path grpc_host ws_host h2_host xhttp_host is_reality is_servername is_public_key is_private_key)
+            is_json_data_reality=$(jq '.inbounds[0]|.streamSettings|.security,(.realitySettings|.serverNames[0],.publicKey,.privateKey,.mldsa65Seed)' <<<$is_json_str)
+            is_up_var_set=(null is_protocol port uuid trojan_password ss_method ss_password door_addr door_port is_dynamic_port is_socks_user is_socks_pass hysteria_password net tcp_type kcp_seed kcp_type quic_type ws_path h2_path grpc_path xhttp_path grpc_host ws_host h2_host xhttp_host is_reality is_servername is_public_key is_private_key is_mldsa65_seed)
             [[ $is_debug ]] && msg "\n------------- debug: $is_config_file -------------"
             i=0
             for v in $(sed 's/""/null/g;s/"//g' <<<"$is_json_data_base $is_json_data_more $is_json_data_host $is_json_data_reality"); do
@@ -1391,9 +1418,14 @@ get() {
                 [[ ! $is_servername ]] && is_servername=$is_random_servername
                 [[ ! $is_private_key ]] && get_pbk
                 if [[ $is_client ]]; then
-                    is_stream='security:"reality",realitySettings:{serverName:"'${is_servername}'",fingerprint:"chrome",publicKey:"'$is_public_key'",shortId:"",spiderX:"/"},xhttpSettings:{host:"'${is_servername}'",path:"'$path'"}'
+                    # 客户端只需 verify (由服务端 seed 推导)
+                    [[ ! $is_mldsa65_verify && $is_mldsa65_seed ]] && get_mldsa65_verify $is_mldsa65_seed
+                    [[ $is_mldsa65_verify ]] && is_reality_pq=',mldsa65Verify:"'$is_mldsa65_verify'"'
+                    is_stream='security:"reality",realitySettings:{serverName:"'${is_servername}'",fingerprint:"chrome",publicKey:"'$is_public_key'",shortId:"",spiderX:"/"'"$is_reality_pq"'},xhttpSettings:{host:"'${is_servername}'",path:"'$path'"}'
                 else
-                    is_stream='security:"reality",realitySettings:{dest:"'${is_servername}\:443'",serverNames:["'${is_servername}'",""],publicKey:"'$is_public_key'",privateKey:"'$is_private_key'",shortIds:[""]},xhttpSettings:{host:"'${is_servername}'",path:"'$path'"}'
+                    [[ ! $is_mldsa65_seed && ! $is_keep_mldsa ]] && get_mldsa65 && check_mldsa65_target $is_servername
+                    [[ $is_mldsa65_seed ]] && is_reality_pq=',mldsa65Seed:"'$is_mldsa65_seed'"'
+                    is_stream='security:"reality",realitySettings:{dest:"'${is_servername}\:443'",serverNames:["'${is_servername}'",""],publicKey:"'$is_public_key'",privateKey:"'$is_private_key'"'"$is_reality_pq"',shortIds:[""]},xhttpSettings:{host:"'${is_servername}'",path:"'$path'"}'
                 fi
             else
                 is_stream='xhttpSettings:{host:"'$host'",path:"'$path'"}'
@@ -1406,9 +1438,14 @@ get() {
             if [[ $is_reality ]]; then
                 [[ ! $is_servername ]] && is_servername=$is_random_servername
                 [[ ! $is_private_key ]] && get_pbk
-                is_stream='security:"reality",realitySettings:{dest:"'${is_servername}\:443'",serverNames:["'${is_servername}'",""],publicKey:"'$is_public_key'",privateKey:"'$is_private_key'",shortIds:[""]}'
                 if [[ $is_client ]]; then
-                    is_stream='security:"reality",realitySettings:{serverName:"'${is_servername}'",fingerprint:"chrome",publicKey:"'$is_public_key'",shortId:"",spiderX:"/"}'
+                    [[ ! $is_mldsa65_verify && $is_mldsa65_seed ]] && get_mldsa65_verify $is_mldsa65_seed
+                    [[ $is_mldsa65_verify ]] && is_reality_pq=',mldsa65Verify:"'$is_mldsa65_verify'"'
+                    is_stream='security:"reality",realitySettings:{serverName:"'${is_servername}'",fingerprint:"chrome",publicKey:"'$is_public_key'",shortId:"",spiderX:"/"'"$is_reality_pq"'}'
+                else
+                    [[ ! $is_mldsa65_seed && ! $is_keep_mldsa ]] && get_mldsa65 && check_mldsa65_target $is_servername
+                    [[ $is_mldsa65_seed ]] && is_reality_pq=',mldsa65Seed:"'$is_mldsa65_seed'"'
+                    is_stream='security:"reality",realitySettings:{dest:"'${is_servername}\:443'",serverNames:["'${is_servername}'",""],publicKey:"'$is_public_key'",privateKey:"'$is_private_key'"'"$is_reality_pq"',shortIds:[""]}'
                 fi
             fi
             ;;
@@ -1579,6 +1616,17 @@ info() {
     fi
     # is_color=$(shuf -i 41-45 -n1)
     is_color=44
+    # 后量子: ML-KEM 密钥交换由内核自动协商, 链接补上提示以兼容 mihomo/clash;
+    # 启用 mldsa65 (ML-DSA-65 后量子签名) 时同步给出 verify
+    is_url_pq='&support-x25519mlkem768=true'
+    is_info_pq_text='X25519MLKEM768 (自动协商)'
+    if [[ $is_reality ]]; then
+        [[ ! $is_mldsa65_verify && $is_mldsa65_seed ]] && get_mldsa65_verify $is_mldsa65_seed
+        [[ $is_mldsa65_verify ]] && {
+            is_url_pq="&mldsa65Verify=$is_mldsa65_verify$is_url_pq"
+            is_info_pq_text='ML-DSA-65 + X25519MLKEM768'
+        }
+    fi
     case $net in
     tcp | kcp | quic)
         is_can_change=(0 1 5 7)
@@ -1603,9 +1651,9 @@ info() {
         if [[ $is_reality ]]; then
             is_color=41
             is_can_change=(0 1 5 10 11)
-            is_info_show=(0 1 2 3 15 8 16 17 18)
-            is_info_str=($is_protocol $is_addr $port $uuid xtls-rprx-vision reality $is_servername "chrome" $is_public_key)
-            is_url="$is_protocol://$uuid@$is_addr:$port?encryption=none&security=reality&flow=xtls-rprx-vision&type=tcp&sni=$is_servername&pbk=$is_public_key&fp=chrome#233boy-$net-$is_addr"
+            is_info_show=(0 1 2 3 15 8 16 17 18 21)
+            is_info_str=($is_protocol $is_addr $port $uuid xtls-rprx-vision reality $is_servername "chrome" $is_public_key "$is_info_pq_text")
+            is_url="$is_protocol://$uuid@$is_addr:$port?encryption=none&security=reality&flow=xtls-rprx-vision&type=tcp&sni=$is_servername&pbk=$is_public_key&fp=chrome$is_url_pq#233boy-$net-$is_addr"
         fi
         ;;
     hy*)
@@ -1628,9 +1676,9 @@ info() {
             # xhttp + reality: 无域名/证书, 分享链接携带 reality 参数
             is_color=41
             is_can_change=(0 1 3 5 10 11)
-            is_info_show=(0 1 2 3 4 7 8 16 17 18)
-            is_url="$is_protocol://$uuid@$is_addr:$port?encryption=none&security=reality&type=$net&path=$(sed 's#/#%2F#g' <<<$path)&host=$is_servername&sni=$is_servername&pbk=$is_public_key&fp=chrome#233boy-$net-$is_addr"
-            is_info_str=($is_protocol $is_addr $port $uuid $net $path reality $is_servername chrome $is_public_key)
+            is_info_show=(0 1 2 3 4 7 8 16 17 18 21)
+            is_url="$is_protocol://$uuid@$is_addr:$port?encryption=none&security=reality&type=$net&path=$(sed 's#/#%2F#g' <<<$path)&host=$is_servername&sni=$is_servername&pbk=$is_public_key&fp=chrome$is_url_pq#233boy-$net-$is_addr"
+            is_info_str=($is_protocol $is_addr $port $uuid $net $path reality $is_servername chrome $is_public_key "$is_info_pq_text")
         else
             is_can_change=(0 1 2 3 5)
             is_info_show=(0 1 2 3 4 6 7 8)
@@ -1886,12 +1934,13 @@ main() {
         [[ $1 == 'no-auto-tls' ]] && is_no_auto_tls=1
         add ${@:2}
         ;;
-    api | bin | pbk | x25519 | tls | run | uuid)
+    api | bin | pbk | pq | x25519 | mldsa65 | tls | run | uuid)
         is_run_command=$1
         if [[ $1 == 'bin' ]]; then
             $is_core_bin ${@:2}
         else
             [[ $is_run_command == 'pbk' ]] && is_run_command=x25519
+            [[ $is_run_command == 'pq' ]] && is_run_command=mldsa65
             $is_core_bin $is_run_command ${@:2}
         fi
         ;;
@@ -1903,6 +1952,7 @@ main() {
         change ${@:2}
         ;;
     client | genc)
+        is_keep_mldsa=1
         [[ $1 == 'client' ]] && is_full_client=1
         create client $2
         ;;
@@ -1966,6 +2016,7 @@ main() {
         fi
         ;;
     i | info)
+        is_keep_mldsa=1 # 只读展示, 不生成新的后量子签名密钥
         info $2
         ;;
     ip)
@@ -1977,6 +2028,7 @@ main() {
         log_set $@
         ;;
     url | qr)
+        is_keep_mldsa=1
         url_qr $@
         ;;
     un | uninstall)

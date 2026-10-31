@@ -70,7 +70,7 @@ bash -c "$(wget -qO- https://raw.githubusercontent.com/tszjj/Xray/main/install.s
 添加（端口 / UUID / 路径 / SNI 都可选，缺省自动生成）：
 
 ```bash
-xray add xr                      # 全自动：随机端口、随机 UUID、随机路径、随机 SNI
+xray add xr                      # 全自动：随机端口、随机 UUID、/uuid 路径、SNI=aws.amazon.com
 xray add xr 443                  # 指定端口
 xray add xr 443 <uuid>           # 指定端口与 UUID
 xray add xr 443 <uuid> /path     # 再指定路径
@@ -96,7 +96,7 @@ xray port 443 8443            # 改端口
 "streamSettings": {
   "network": "xhttp",
   "security": "reality",
-  "realitySettings": { "dest": "www.amazon.com:443", "serverNames": ["www.amazon.com", ""], "privateKey": "...", "shortIds": [""] },
+  "realitySettings": { "dest": "www.amazon.com:443", "serverNames": ["www.amazon.com", ""], "privateKey": "...", "mldsa65Seed": "...", "shortIds": [""] },
   "xhttpSettings": { "host": "www.amazon.com", "path": "/<uuid>" }
 }
 ```
@@ -106,12 +106,32 @@ xray port 443 8443            # 改端口
 - 该组合不需要域名，也不依赖 Caddy 自动申请证书，端口建议直接使用 443
 - `no-auto-tls` 同样适用于该协议（本来就不需要证书）
 
+# 后量子（Post-Quantum）
+
+Xray v26.9.8 起 REALITY 握手强制要求 `X25519MLKEM768` 混合密钥交换，脚本涉及的两种能力分开说明：
+
+| 能力 | 谁控制 | 本脚本处理 |
+|---|---|---|
+| `X25519MLKEM768` 密钥交换 | 内核自动协商，无配置开关（取决于 target 是否支持） | 无需配置；分享链接自动附加 `support-x25519mlkem768=true`，供 mihomo / Clash 系客户端开启 |
+| `mldsa65Seed` / `mldsa65Verify`（ML-DSA-65 后量子签名） | 服务端写 seed，客户端写 verify | `add reality` / `add xr` 自动生成 seed；`xray client` 自动推导 verify，分享链接自动带上 |
+
+```bash
+xray pq                       # 同等于 xray mldsa65，生成 Seed / Verify
+xray pq -i <seed>             # 由 seed 推导 Verify
+xray info 443                 # “后量子”一行显示当前状态
+```
+
+注意：
+- 开启后量子签名后，`target` 证书链必须 **大于 3500 字节**，否则会形成指纹；添加时脚本会自动 `tls ping` 检查并提示
+- 老配置（无 `mldsa65Seed`）照常可用，只是分享链接不会带 `mldsa65Verify`
+- 已有配置执行 `xray port` / `fix` / `xray key auto` 会自动补上 seed，后者会同时更换 X25519 与 ML-DSA-65 密钥
+
 # 帮助
 
 使用：`xray help`
 
 ```
-Xray script v1.37 by 233boy
+Xray script v1.38 by 233boy
 Usage: xray [options]... [args]...
 
 基本:
