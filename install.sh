@@ -204,9 +204,15 @@ download() {
     esac
 
     msg warn "下载 ${name} > ${link}"
-    if _wget -t 3 -q -c $link -O $tmpfile; then
-        mv -f $tmpfile $is_ok
+    if ! _wget -t 3 -q -c $link -O $tmpfile; then
+        # 本分支未构建 release(例如 fork 未启用 Actions) 时, 回退到分支源码包
+        [[ $1 != 'sh' ]] && return
+        link=https://github.com/${is_sh_repo}/archive/refs/heads/main.zip
+        msg warn "下载 ${name} > ${link}"
+        _wget -t 3 -q -c $link -O $tmpfile || return
+        is_sh_src_zip=1
     fi
+    mv -f $tmpfile $is_ok
 }
 
 # get server ip
@@ -412,6 +418,11 @@ main() {
     # copy sh file or unzip sh zip file.
     if [[ $local_install ]]; then
         cp -rf $PWD/* $is_sh_dir
+    elif [[ $is_sh_src_zip ]]; then
+        # 源码包内多一层目录 (Xray-main/), 需要把内容上移
+        mkdir -p $tmpdir/is_sh_src
+        unzip -qo $is_sh_ok -d $tmpdir/is_sh_src
+        cp -rf $tmpdir/is_sh_src/*/* $is_sh_dir/
     else
         unzip -qo $is_sh_ok -d $is_sh_dir
     fi

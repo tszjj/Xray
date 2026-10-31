@@ -15,7 +15,8 @@
 bash -c "$(wget -qO- https://raw.githubusercontent.com/tszjj/Xray/main/install.sh)"
 ```
 
-> 若脚本更新（`xray U`）失败，请检查本仓库的 GitHub Actions 是否正常运行，脚本的 code.zip 由 Actions 自动构建并发布。
+> 脚本的 `code.zip` 由 GitHub Actions 自动构建并发布到 release。fork 默认会关闭 Actions，
+> 未启用时安装与 `xray U` 更新会自动回退到 main 分支源码包，不影响使用。
 
 # 特点
 

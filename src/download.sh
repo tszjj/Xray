@@ -14,6 +14,11 @@ get_latest_version() {
         ;;
     esac
     latest_ver=$(_wget -qO- $url | grep tag_name | grep -E -o 'v([0-9.]+)')
+    # 本分支未发布 release(例如 fork 未启用 Actions) 时, 直接从分支源码读取脚本版本号
+    [[ ! $latest_ver && $1 == 'sh' ]] && {
+        latest_ver=$(_wget -qO- "https://raw.githubusercontent.com/${is_sh_repo}/main/${is_core}.sh" | grep -E -o 'ver=v[0-9.]+' | sed 's/ver=//')
+        [[ $latest_ver ]] && is_sh_src_zip=1
+    }
     [[ ! $latest_ver ]] && {
         err "获取 ${name} 最新版本失败."
     }
@@ -40,9 +45,20 @@ download() {
     sh)
         name="$is_core_name 脚本"
         tmpfile=$tmpdir/sh.zip
-        link="https://github.com/${is_sh_repo}/releases/download/${latest_ver}/code.zip"
+        if [[ $is_sh_src_zip ]]; then
+            # 无 release 时使用分支源码包
+            link="https://github.com/${is_sh_repo}/archive/refs/heads/main.zip"
+        else
+            link="https://github.com/${is_sh_repo}/releases/download/${latest_ver}/code.zip"
+        fi
         download_file
-        unzip -qo $tmpfile -d $is_sh_dir
+        if [[ $is_sh_src_zip ]]; then
+            mkdir -p $tmpdir/sh_src
+            unzip -qo $tmpfile -d $tmpdir/sh_src
+            cp -rf $tmpdir/sh_src/*/* $is_sh_dir/
+        else
+            unzip -qo $tmpfile -d $is_sh_dir
+        fi
         chmod +x $is_sh_bin
         ;;
     dat)

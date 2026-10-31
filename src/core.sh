@@ -1794,7 +1794,12 @@ update() {
     fi
     download $is_update_name $is_new_ver
     msg "更新成功, 当前 $is_show_name 版本: $(_green $is_new_ver)\n"
-    msg "$(_green 请查看更新说明: https://github.com/$is_update_repo/releases/tag/$is_new_ver)\n"
+    if [[ $is_sh_src_zip ]]; then
+        # 无 release 时按分支源码更新
+        msg "$(_green 请查看更新说明: https://github.com/$is_update_repo/commits/main)\n"
+    else
+        msg "$(_green 请查看更新说明: https://github.com/$is_update_repo/releases/tag/$is_new_ver)\n"
+    fi
     [[ $is_update_name != 'sh' ]] && manage restart $is_update_name &
 }
 
