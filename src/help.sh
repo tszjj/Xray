@@ -17,6 +17,7 @@ show_help() {
             "   ss2022                                          返回一个可用于 Shadowsocks 2022 的密码\n"
             "一般:"
             "   a, add [protocol] [args... | auto]              添加配置"
+            "      add xr [port] [uuid] [/path] [sni]           添加 VLESS-XHTTP-REALITY 配置 (本分支)"
             "   c, change [name] [option] [args... | auto]      更改配置"
             "   d, del [name]                                   删除配置**"
             "   i, info [name]                                  查看配置"

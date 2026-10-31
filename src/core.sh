@@ -11,6 +11,7 @@ protocol_list=(
     VLESS-WS-TLS
     VLESS-gRPC-TLS
     VLESS-XHTTP-TLS
+    VLESS-XHTTP-REALITY
     VLESS-REALITY
     # Trojan-H2-TLS
     Trojan-WS-TLS
@@ -513,7 +514,14 @@ change() {
     }
     is_old_net=$net
     [[ $host ]] && net=$is_protocol-$net-tls
-    [[ $is_reality ]] && net=reality
+    if [[ $is_reality ]]; then
+        # xhttp + reality 保持 xhttp 传输, 否则使用 reality 伪传输名
+        if [[ $is_old_net == 'xhttp' ]]; then
+            net=xhttp-reality
+        else
+            net=reality
+        fi
+    fi
     [[ $is_dynamic_port ]] && net=${net}d
     [[ $3 == 'auto' ]] && is_auto=1
     # if is_dont_show_info exist, cant show info.
@@ -916,6 +924,9 @@ add() {
         xhttp)
             is_new_protocol=VLESS-XHTTP-TLS
             ;;
+        xr | rx | xhttp-reality | reality-xhttp)
+            is_new_protocol=VLESS-XHTTP-REALITY
+            ;;
         r | reality)
             is_new_protocol=VLESS-REALITY
             ;;
@@ -973,8 +984,15 @@ add() {
         is_reality=1
         is_use_port=$2
         is_use_uuid=$3
-        is_use_servername=$4
-        is_add_opts="[port] [uuid] [sni]"
+        if [[ $(grep -i xhttp <<<$is_new_protocol) ]]; then
+            # xhttp + reality: [port] [uuid] [/path] [sni]
+            is_use_path=$4
+            is_use_servername=$5
+            is_add_opts="[port] [uuid] [/path] [sni]"
+        else
+            is_use_servername=$4
+            is_add_opts="[port] [uuid] [sni]"
+        fi
         ;;
     hysteria*)
         is_use_port=$2
@@ -1046,7 +1064,8 @@ add() {
     fi
 
     # no-auto-tls only use h2,ws,grpc
-    if [[ $is_no_auto_tls && ! $is_use_tls ]]; then
+    # reality 不需要证书, 因此 XHTTP-REALITY 也可配合 no-auto-tls 使用
+    if [[ $is_no_auto_tls && ! $is_use_tls && ! $is_reality ]]; then
         err "$is_new_protocol 不支持手动配置 tls."
     fi
 
@@ -1266,7 +1285,10 @@ get() {
             host="${ws_host}${h2_host}${grpc_host}${xhttp_host}"
             header_type="${tcp_type}${kcp_type}${quic_type}"
             if [[ $is_reality == 'reality' ]]; then
-                net=reality
+                # xhttp + reality 保留 xhttp 传输, 只有 tcp 才使用 reality 伪传输名
+                [[ $net == 'tcp' || ! $net ]] && net=reality
+                # xhttp + reality 的 host 即 serverName, 不作为域名使用(不启用 Caddy TLS)
+                [[ $net == 'xhttp' ]] && host=
             else
                 is_reality=
             fi
@@ -1306,7 +1328,8 @@ get() {
             is_protocol=vless
             is_server_id_json='settings:{clients:[{id:"'$uuid'"}],decryption:"none"}'
             is_client_id_json='settings:{vnext:[{address:"'$is_addr'",port:'"$port"',users:[{id:"'$uuid'",encryption:"none"}]}]}'
-            if [[ $is_reality ]]; then
+            # XTLS Vision 只适用于 TCP 传输, xhttp + reality 必须留空 flow
+            if [[ $is_reality && ! $(grep -i xhttp <<<$is_lower) ]]; then
                 is_server_id_json='settings:{clients:[{id:"'$uuid'",flow:"xtls-rprx-vision"}],decryption:"none"}'
                 is_client_id_json='settings:{vnext:[{address:"'$is_addr'",port:'"$port"',users:[{id:"'$uuid'",encryption:"none",flow:"xtls-rprx-vision"}]}]}'
             fi
@@ -1360,6 +1383,22 @@ get() {
         esac
         [[ $net ]] && return # if net exist, dont need more json args
         case $is_lower in
+        *xhttp*)
+            net=xhttp
+            [[ ! $path ]] && path="/$uuid"
+            if [[ $is_reality ]]; then
+                # XHTTP + REALITY: 无需域名与证书, TLS 握手伪装为目标站点
+                [[ ! $is_servername ]] && is_servername=$is_random_servername
+                [[ ! $is_private_key ]] && get_pbk
+                if [[ $is_client ]]; then
+                    is_stream='security:"reality",realitySettings:{serverName:"'${is_servername}'",fingerprint:"chrome",publicKey:"'$is_public_key'",shortId:"",spiderX:"/"},xhttpSettings:{host:"'${is_servername}'",path:"'$path'"}'
+                else
+                    is_stream='security:"reality",realitySettings:{dest:"'${is_servername}\:443'",serverNames:["'${is_servername}'",""],publicKey:"'$is_public_key'",privateKey:"'$is_private_key'",shortIds:[""]},xhttpSettings:{host:"'${is_servername}'",path:"'$path'"}'
+                fi
+            else
+                is_stream='xhttpSettings:{host:"'$host'",path:"'$path'"}'
+            fi
+            ;;
         *tcp* | *reality*)
             net=tcp
             [[ ! $header_type ]] && header_type=none
@@ -1406,11 +1445,6 @@ get() {
             net=h2
             [[ ! $path ]] && path="/$uuid"
             is_stream='httpSettings:{path:"'$path'",host:["'$host'"]}'
-            ;;
-        *xhttp*)
-            net=xhttp
-            [[ ! $path ]] && path="/$uuid"
-            is_stream='xhttpSettings:{host:"'$host'",path:"'$path'"}'
             ;;
         *)
             err "无法识别传输协议: $is_config_file"
@@ -1590,26 +1624,35 @@ info() {
         ;;
     ws | h2 | grpc | xhttp)
         is_color=45
-        is_can_change=(0 1 2 3 5)
-        is_info_show=(0 1 2 3 4 6 7 8)
-        is_url_path=path
-        [[ $net == 'grpc' ]] && {
-            path=$(sed 's#/##g' <<<$path)
-            is_url_path=serviceName
-        }
-        [[ $is_protocol == 'vmess' ]] && {
-            is_vmess_url=$(jq -c '{v:2,ps:"'233boy-$net-$host'",add:"'$is_addr'",port:"'$is_https_port'",id:"'$uuid'",aid:"0",net:"'$net'",host:"'$host'",path:"'$path'",tls:"'tls'"}' <<<{})
-            is_url=vmess://$(echo -n $is_vmess_url | base64 -w 0)
-        } || {
-            [[ $is_trojan ]] && {
-                uuid=$trojan_password
-                is_can_change=(0 1 2 3 4)
-                is_info_show=(0 1 2 10 4 6 7 8)
+        if [[ $net == 'xhttp' && $is_reality ]]; then
+            # xhttp + reality: 无域名/证书, 分享链接携带 reality 参数
+            is_color=41
+            is_can_change=(0 1 3 5 10 11)
+            is_info_show=(0 1 2 3 4 7 8 16 17 18)
+            is_url="$is_protocol://$uuid@$is_addr:$port?encryption=none&security=reality&type=$net&path=$(sed 's#/#%2F#g' <<<$path)&host=$is_servername&sni=$is_servername&pbk=$is_public_key&fp=chrome#233boy-$net-$is_addr"
+            is_info_str=($is_protocol $is_addr $port $uuid $net $path reality $is_servername chrome $is_public_key)
+        else
+            is_can_change=(0 1 2 3 5)
+            is_info_show=(0 1 2 3 4 6 7 8)
+            is_url_path=path
+            [[ $net == 'grpc' ]] && {
+                path=$(sed 's#/##g' <<<$path)
+                is_url_path=serviceName
             }
-            is_url="$is_protocol://$uuid@$host:$is_https_port?encryption=none&security=tls&type=$net&host=$host&${is_url_path}=$(sed 's#/#%2F#g' <<<$path)#233boy-$net-$host"
-        }
-        [[ $is_caddy ]] && is_can_change+=(13)
-        is_info_str=($is_protocol $is_addr $is_https_port $uuid $net $host $path 'tls')
+            [[ $is_protocol == 'vmess' ]] && {
+                is_vmess_url=$(jq -c '{v:2,ps:"'233boy-$net-$host'",add:"'$is_addr'",port:"'$is_https_port'",id:"'$uuid'",aid:"0",net:"'$net'",host:"'$host'",path:"'$path'",tls:"'tls'"}' <<<{})
+                is_url=vmess://$(echo -n $is_vmess_url | base64 -w 0)
+            } || {
+                [[ $is_trojan ]] && {
+                    uuid=$trojan_password
+                    is_can_change=(0 1 2 3 4)
+                    is_info_show=(0 1 2 10 4 6 7 8)
+                }
+                is_url="$is_protocol://$uuid@$host:$is_https_port?encryption=none&security=tls&type=$net&host=$host&${is_url_path}=$(sed 's#/#%2F#g' <<<$path)#233boy-$net-$host"
+            }
+            [[ $is_caddy ]] && is_can_change+=(13)
+            is_info_str=($is_protocol $is_addr $is_https_port $uuid $net $host $path 'tls')
+        fi
         ;;
     door)
         is_can_change=(0 1 8 9)

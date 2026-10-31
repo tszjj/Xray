@@ -1,7 +1,9 @@
 #!/bin/bash
 
 author=233boy
-# github=https://github.com/233boy/xray
+# github=https://github.com/tszjj/Xray
+# fork of https://github.com/233boy/xray
+# 本分支: 仓库链接指向 tszjj/Xray, 并新增 VLESS-XHTTP-REALITY 支持
 
 # bash fonts colors
 red='\e[31m'
@@ -80,7 +82,8 @@ is_conf_dir=$is_core_dir/conf
 is_log_dir=/var/log/$is_core
 is_sh_bin=/usr/local/bin/$is_core
 is_sh_dir=$is_core_dir/sh
-is_sh_repo=$author/$is_core
+# 脚本仓库(本分支), 不使用 $author/$is_core, 避免指回主仓库
+is_sh_repo=tszjj/Xray
 is_pkg="wget unzip"
 is_config_json=$is_core_dir/config.json
 tmp_var_lists=(

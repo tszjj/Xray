@@ -2,6 +2,21 @@
 
 最好用的 Xray 一键安装脚本 & 管理脚本
 
+# 本分支说明
+
+- 仓库：https://github.com/tszjj/Xray
+- 上游：fork 自 https://github.com/233boy/xray ，脚本逻辑与上游保持一致，遵循原作者的 GPL-3.0 许可
+- 本分支改动：
+  1. 脚本内的仓库相关链接（安装、更新、反馈问题、关于）全部指向本分支仓库 `tszjj/Xray`
+  2. 新增 **VLESS-XHTTP-REALITY** 协议，同时启用 REALITY 与 XHTTP，无需域名与证书
+- 一键安装：
+
+```bash
+bash -c "$(wget -qO- https://raw.githubusercontent.com/tszjj/Xray/main/install.sh)"
+```
+
+> 若脚本更新（`xray U`）失败，请检查本仓库的 GitHub Actions 是否正常运行，脚本的 code.zip 由 Actions 自动构建并发布。
+
 # 特点
 
 - 快速安装
@@ -16,6 +31,7 @@
 - 强大的快捷参数
 - 支持所有常用协议
 - 一键添加 VLESS-REALITY (默认)
+- 一键添加 VLESS-XHTTP-REALITY (REALITY + XHTTP 同时启用)
 - 一键添加 Shadowsocks 2022
 - 一键添加 VMess-(TCP/mKCP)
 - 一键添加 VMess-(WS/gRPC)-TLS
@@ -43,14 +59,58 @@
 
 # 文档
 
-安装及使用：https://233boy.com/xray/xray-script/
+上游文档（协议参数与用法基本通用）：https://233boy.com/xray/xray-script/
+
+# VLESS-XHTTP-REALITY（本分支新增）
+
+把 **REALITY** 与 **XHTTP** 组合到同一个入站：用 XHTTP 承载 VLESS 流量，再由 REALITY 伪装 TLS 握手，
+因此既保留了 REALITY 免域名、免证书、抗主动探测的优势，又具备 XHTTP 的分流与抗 QoS 特性。
+
+添加（端口 / UUID / 路径 / SNI 都可选，缺省自动生成）：
+
+```bash
+xray add xr                      # 全自动：随机端口、随机 UUID、随机路径、随机 SNI
+xray add xr 443                  # 指定端口
+xray add xr 443 <uuid>           # 指定端口与 UUID
+xray add xr 443 <uuid> /path     # 再指定路径
+xray add xr 443 <uuid> /path www.amazon.com   # 再指定 SNI (伪装目标站点)
+# 别名: xr / rx / xhttp-reality / reality-xhttp
+```
+
+查看、分享与修改：
+
+```bash
+xray info 443        # 也可直接 xray i 交互选择
+xray url  443        # 输出 vless:// 分享链接
+xray qr   443        # 输出二维码
+xray path 443 /new-path       # 改路径
+xray sni  443 www.ebay.com    # 改 SNI（同时作为 HTTP Host）
+xray key  443 auto            # 重新生成 REALITY 密钥对
+xray port 443 8443            # 改端口
+```
+
+生成的入站结构（关键部分）：
+
+```json
+"streamSettings": {
+  "network": "xhttp",
+  "security": "reality",
+  "realitySettings": { "dest": "www.amazon.com:443", "serverNames": ["www.amazon.com", ""], "privateKey": "...", "shortIds": [""] },
+  "xhttpSettings": { "host": "www.amazon.com", "path": "/<uuid>" }
+}
+```
+
+说明：
+- XHTTP + REALITY 下 `flow` 必须为空，脚本已自动处理（不再写入 `xtls-rprx-vision`）
+- 该组合不需要域名，也不依赖 Caddy 自动申请证书，端口建议直接使用 443
+- `no-auto-tls` 同样适用于该协议（本来就不需要证书）
 
 # 帮助
 
 使用：`xray help`
 
 ```
-Xray script v1.21 by 233boy
+Xray script v1.37 by 233boy
 Usage: xray [options]... [args]...
 
 基本:
@@ -62,6 +122,7 @@ Usage: xray [options]... [args]...
 
 一般:
    a, add [protocol] [args... | auto]              添加配置
+      add xr [port] [uuid] [/path] [sni]           添加 VLESS-XHTTP-REALITY 配置 (本分支)
    c, change [name] [option] [args... | auto]      更改配置
    d, del [name]                                   删除配置**
    i, info [name]                                  查看配置
@@ -118,6 +179,6 @@ Usage: xray [options]... [args]...
    h, help                                         显示此帮助界面
 
 谨慎使用 del, ddel, 此选项会直接删除配置; 无需确认
-反馈问题) https://github.com/233boy/xray/issues
+反馈问题) https://github.com/tszjj/Xray/issues
 文档(doc) https://233boy.com/xray/xray-script/
 ```
